@@ -1,0 +1,100 @@
+name: Build libpinyinime.so
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '**/*.cpp'
+      - '**/*.h'
+      - 'pinyinime.pro'
+      - '.github/workflows/build-so.yml'
+
+jobs:
+  linux-x64:
+    name: Linux x64 (Qt, qmake)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qtbase5-dev qtchooser qmake cmake build-essential
+
+      - name: Build shared library
+        run: |
+          qmake -v
+          qmake pinyinime.pro CONFIG+=release
+          make -j$(nproc)
+          # Collect artifacts
+          mkdir -p artifacts/linux-x64
+          # Common output names by qmake: libpinyinime.so or libpinyinime.so.*
+          find . -maxdepth 2 -type f -name 'libpinyinime*.so*' -print -exec cp -v {} artifacts/linux-x64/ \;
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libpinyinime-linux-x64
+          path: artifacts/linux-x64/*
+
+  # Android NDK (CMake) — optional skeleton
+  # NOTE: This repository relies on Qt in some headers (QFile). To produce Android .so here,
+  # you need either: (1) provide a CMakeLists.txt and guard out Qt-only parts, or
+  # (2) supply prebuilt JNI-ready so. Enable this job after adding those pieces.
+  android-ndk:
+    if: ${{ false }}  # set to true after adding Android build scripts
+    name: Android NDK (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup NDK
+        uses: android-actions/setup-ndk@v3
+        with:
+          ndk-version: r26d
+
+      - name: Generate CMakeLists (placeholder)
+        run: |
+          cat > CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.22)
+          project(pinyinime LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_library(pinyinime SHARED
+            src/pinyinime.cpp
+            src/matrixsearch.cpp
+            src/dicttrie.cpp
+            src/dictlist.cpp
+            src/ngram.cpp
+            src/spellingtable.cpp
+            src/spellingtrie.cpp
+            src/splparser.cpp
+            src/searchutility.cpp
+            src/utf16char.cpp
+            src/utf16reader.cpp)
+          target_include_directories(pinyinime PRIVATE src)
+          # TODO: Remove Qt dependency or provide Qt for Android before enabling this job.
+          EOF
+
+      - name: Configure & Build (placeholder)
+        env:
+          ANDROID_NDK: ${{ env.ANDROID_NDK_ROOT }}
+        run: |
+          cmake -B build -S . \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Upload Android artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: libpinyinime-android-arm64-placeholder
+          path: build/**/*.so
+
