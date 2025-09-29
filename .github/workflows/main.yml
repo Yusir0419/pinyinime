@@ -1,100 +1,147 @@
-name: Build libpinyinime.so
+name: Build Android ARM64 Library
 
 on:
-  workflow_dispatch:
   push:
     branches: [ main, master ]
-    paths:
-      - '**/*.cpp'
-      - '**/*.h'
-      - 'pinyinime.pro'
-      - '.github/workflows/build-so.yml'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
-  linux-x64:
-    name: Linux x64 (Qt, qmake)
+  build-android-arm64:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Install Qt build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qtbase5-dev qtchooser qmake cmake build-essential
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: '11'
+        distribution: 'temurin'
 
-      - name: Build shared library
-        run: |
-          qmake -v
-          qmake pinyinime.pro CONFIG+=release
-          make -j$(nproc)
-          # Collect artifacts
-          mkdir -p artifacts/linux-x64
-          # Common output names by qmake: libpinyinime.so or libpinyinime.so.*
-          find . -maxdepth 2 -type f -name 'libpinyinime*.so*' -print -exec cp -v {} artifacts/linux-x64/ \;
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r25c
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: libpinyinime-linux-x64
-          path: artifacts/linux-x64/*
+    - name: Create CMakeLists.txt for NDK build
+      run: |
+        cat > CMakeLists.txt << 'EOF'
+        cmake_minimum_required(VERSION 3.18.1)
+        project(pinyinime)
 
-  # Android NDK (CMake) — optional skeleton
-  # NOTE: This repository relies on Qt in some headers (QFile). To produce Android .so here,
-  # you need either: (1) provide a CMakeLists.txt and guard out Qt-only parts, or
-  # (2) supply prebuilt JNI-ready so. Enable this job after adding those pieces.
-  android-ndk:
-    if: ${{ false }}  # set to true after adding Android build scripts
-    name: Android NDK (arm64-v8a)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+        # Set C++ standard
+        set(CMAKE_CXX_STANDARD 11)
+        set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-      - name: Setup NDK
-        uses: android-actions/setup-ndk@v3
-        with:
-          ndk-version: r26d
+        # Include directories
+        include_directories(src)
 
-      - name: Generate CMakeLists (placeholder)
-        run: |
-          cat > CMakeLists.txt <<'EOF'
-          cmake_minimum_required(VERSION 3.22)
-          project(pinyinime LANGUAGES CXX)
-          set(CMAKE_CXX_STANDARD 17)
-          set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          add_library(pinyinime SHARED
-            src/pinyinime.cpp
-            src/matrixsearch.cpp
-            src/dicttrie.cpp
+        # Source files
+        set(SOURCES
+            src/dictbuilder.cpp
             src/dictlist.cpp
+            src/dicttrie.cpp
+            src/lpicache.cpp
+            src/matrixsearch.cpp
+            src/mystdlib.cpp
             src/ngram.cpp
+            src/pinyinime.cpp
+            src/searchutility.cpp
             src/spellingtable.cpp
             src/spellingtrie.cpp
             src/splparser.cpp
-            src/searchutility.cpp
+            src/sync.cpp
+            src/userdict.cpp
             src/utf16char.cpp
-            src/utf16reader.cpp)
-          target_include_directories(pinyinime PRIVATE src)
-          # TODO: Remove Qt dependency or provide Qt for Android before enabling this job.
-          EOF
+            src/utf16reader.cpp
+        )
 
-      - name: Configure & Build (placeholder)
-        env:
-          ANDROID_NDK: ${{ env.ANDROID_NDK_ROOT }}
-        run: |
-          cmake -B build -S . \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
-            -DANDROID_STL=c++_shared \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
+        # Create shared library
+        add_library(pinyinime SHARED ${SOURCES})
 
-      - name: Upload Android artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: libpinyinime-android-arm64-placeholder
-          path: build/**/*.so
+        # Set library properties
+        set_target_properties(pinyinime PROPERTIES
+            VERSION 1.0
+            SOVERSION 1
+        )
 
+        # Compiler definitions
+        target_compile_definitions(pinyinime PRIVATE PINYINIME_LIBRARY)
+        EOF
+
+    - name: Build for ARM64
+      run: |
+        mkdir -p build-arm64
+        cd build-arm64
+        cmake .. \
+          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
+          -DANDROID_ABI=arm64-v8a \
+          -DANDROID_PLATFORM=android-21 \
+          -DCMAKE_BUILD_TYPE=Release
+        make -j$(nproc)
+
+    - name: Build for ARMv7
+      run: |
+        mkdir -p build-armv7
+        cd build-armv7
+        cmake .. \
+          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
+          -DANDROID_ABI=armeabi-v7a \
+          -DANDROID_PLATFORM=android-21 \
+          -DCMAKE_BUILD_TYPE=Release
+        make -j$(nproc)
+
+    - name: Build for x86_64
+      run: |
+        mkdir -p build-x86_64
+        cd build-x86_64
+        cmake .. \
+          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
+          -DANDROID_ABI=x86_64 \
+          -DANDROID_PLATFORM=android-21 \
+          -DCMAKE_BUILD_TYPE=Release
+        make -j$(nproc)
+
+    - name: Verify build outputs
+      run: |
+        echo "=== ARM64 Build ==="
+        ls -la build-arm64/
+        file build-arm64/libpinyinime.so || true
+        echo "=== ARMv7 Build ==="
+        ls -la build-armv7/
+        file build-armv7/libpinyinime.so || true
+        echo "=== x86_64 Build ==="
+        ls -la build-x86_64/
+        file build-x86_64/libpinyinime.so || true
+
+    - name: Create distribution package
+      run: |
+        mkdir -p dist/lib/{arm64-v8a,armeabi-v7a,x86_64}
+        mkdir -p dist/include
+
+        # Copy libraries
+        cp build-arm64/libpinyinime.so dist/lib/arm64-v8a/
+        cp build-armv7/libpinyinime.so dist/lib/armeabi-v7a/
+        cp build-x86_64/libpinyinime.so dist/lib/x86_64/
+
+        # Copy headers
+        cp src/pinyinime.h dist/include/
+        cp src/pinyinime_global.h dist/include/
+
+    - name: Upload Android libraries
+      uses: actions/upload-artifact@v4
+      with:
+        name: libpinyinime-android-all-archs
+        path: dist/
+
+    - name: Upload ARM64 library only
+      uses: actions/upload-artifact@v4
+      with:
+        name: libpinyinime-android-arm64
+        path: |
+          build-arm64/libpinyinime.so
+          src/pinyinime.h
+          src/pinyinime_global.h
